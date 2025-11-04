@@ -1,4 +1,9 @@
 #include "systemcalls.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <fcntl.h>
 
 /**
  * @param cmd the command to execute with system()
@@ -9,15 +14,15 @@
 */
 bool do_system(const char *cmd)
 {
+    bool ret = true;
+    int err = system(cmd);
+    if (err == -1) {
+        perror("Failed to run system function.");
+        ret = false;
 
-/*
- * TODO  add your code here
- *  Call the system() function with the command set in the cmd
- *   and return a boolean true if the system() call completed with success
- *   or false() if it returned a failure
-*/
+    }
 
-    return true;
+    return ret;
 }
 
 /**
@@ -49,16 +54,33 @@ bool do_exec(int count, ...)
     // and may be removed
     command[count] = command[count];
 
-/*
- * TODO:
- *   Execute a system command by calling fork, execv(),
- *   and wait instead of system (see LSP page 161).
- *   Use the command[0] as the full path to the command to execute
- *   (first argument to execv), and use the remaining arguments
- *   as second argument to the execv() command.
- *
-*/
-
+    int status;
+    pid_t pid;
+    fflush(stdout);
+    pid = fork();
+    if (pid < 0)
+    {
+        perror("fork failed");
+        return false;
+    }
+    else if (pid == 0)
+    {
+        execv(command[0], command);
+        exit(-1);
+    }
+    else
+    {
+        int ret = waitpid(pid, &status, 0);
+        if (ret == -1)
+        {
+            return false;
+        }
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        {
+            return false;
+        }
+    }
+    
     va_end(args);
 
     return true;
@@ -92,6 +114,40 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   The rest of the behaviour is same as do_exec()
  *
 */
+
+    int status;
+    pid_t pid;
+    fflush(stdout);
+    int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+    if (fd < 0) { perror("open"); abort(); }
+    pid = fork();
+    if (pid < 0)
+    {
+        perror("fork failed");
+        return false;
+    }
+    else if (pid == 0)
+    {
+        if (dup2(fd, 1) < 0) { perror("dup2"); abort(); }
+        close(fd);
+        execvp(command[0], command); 
+        perror("execvp");
+        exit(-1);
+    }
+    else
+    {
+        int ret = waitpid(pid, &status, 0);
+        close(fd);
+        if (ret == -1)
+        {
+            return false;
+        }
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        {
+            return false;
+        }
+    }
+
 
     va_end(args);
 
