@@ -51,7 +51,7 @@ if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
 fi
 
 echo "Adding the Image in outdir"
-cp ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ${OUTDIR}/Image
+cp ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ${OUTDIR}
 
 echo "Creating the staging directory for the root filesystem"
 cd "$OUTDIR"
@@ -104,10 +104,10 @@ ${CROSS_COMPILE}readelf -a ${OUTDIR}/rootfs/bin/busybox | grep "program interpre
 ${CROSS_COMPILE}readelf -a ${OUTDIR}/rootfs/bin/busybox | grep "Shared library"
 
 # TODO: Add library dependencies to rootfs
-cp ${SYSROOT}/lib/ld-linux-aarch64.so.1 ${OUTDIR}/rootfs/lib/ld-linux-aarch64.so.1
-cp ${SYSROOT}/lib64/libm.so.6 ${OUTDIR}/rootfs/lib64/libm.so.6
-cp ${SYSROOT}/lib64/libresolv.so.2 ${OUTDIR}/rootfs/lib64/libresolv.so.2
-cp ${SYSROOT}/lib64/libc.so.6 ${OUTDIR}/rootfs/lib64/libc.so.6
+cp ${SYSROOT}/lib/ld-linux-aarch64.so.1 ${OUTDIR}/rootfs/lib
+cp ${SYSROOT}/lib64/libm.so.6 ${OUTDIR}/rootfs/lib64
+cp ${SYSROOT}/lib64/libresolv.so.2 ${OUTDIR}/rootfs/lib64
+cp ${SYSROOT}/lib64/libc.so.6 ${OUTDIR}/rootfs/lib64
 
 # TODO: Make device nodes
 sudo mknod -m 666 ${OUTDIR}/rootfs/dev/null c 1 3
@@ -120,17 +120,18 @@ make CROSS_COMPILE=aarch64-none-linux-gnu-
 
 # TODO: Copy the finder related scripts and executables to the /home directory
 # on the target rootfs
-cp ${SCRIPT_DIR}/finder.sh ${OUTDIR}/rootfs/home/finder.sh
-cp ${SCRIPT_DIR}/finder-test.sh ${OUTDIR}/rootfs/home/finder-test.sh
-cp ${SCRIPT_DIR}/writer ${OUTDIR}/rootfs/home/writer
-cp ${SCRIPT_DIR}/conf/username.txt ${OUTDIR}/rootfs/home/conf/username.txt
-cp ${SCRIPT_DIR}/conf/assignment.txt ${OUTDIR}/rootfs/home/conf/assignment.txt
+cp ${SCRIPT_DIR}/finder.sh ${OUTDIR}/rootfs/home
+cp ${SCRIPT_DIR}/finder-test.sh ${OUTDIR}/rootfs/home
+cp ${SCRIPT_DIR}/writer ${OUTDIR}/rootfs/home
+cp ${SCRIPT_DIR}/conf/username.txt ${OUTDIR}/rootfs/home/conf
+cp ${SCRIPT_DIR}/conf/assignment.txt ${OUTDIR}/rootfs/home/conf
+cp ${SCRIPT_DIR}/autorun-qemu.sh ${OUTDIR}/rootfs/home
 
 # TODO: Chown the root directory
-sudo chown -R root:root $OUTDIR/rootfs
+sudo chown -R root:root ${OUTDIR}/rootfs
 
 # TODO: Create initramfs.cpio.gz
 cd "$OUTDIR/rootfs"
 find . | cpio -H newc -ov --owner root:root > ${OUTDIR}/initramfs.cpio
 cd "$OUTDIR"
-gzip -f initramfs.cpio
+gzip -f ${OUTDIR}/initramfs.cpio
