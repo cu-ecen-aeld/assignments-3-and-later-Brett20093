@@ -1,5 +1,5 @@
 CC = gcc
-CROSS_COMPILE ?=
+CROSS_COMPILE ?= aarch64-none-linux-gnu-
 TARGET = writer
 SRCS = writer.c
 OBJS = $(SRCS:.c=.o)
