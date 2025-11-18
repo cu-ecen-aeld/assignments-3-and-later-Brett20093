@@ -27,7 +27,7 @@ int main(int argc, char *argv[])
     char* write_file = argv[1];
     char* write_str = argv[2];
 
-    int fd = open(write_file, O_WRONLY | O_CREAT);
+    int fd = open(write_file, O_CREAT | O_WRONLY, 0644);
     int write_return = write(fd, write_str, strlen(write_str));
     if (write_return == -1)
     {
