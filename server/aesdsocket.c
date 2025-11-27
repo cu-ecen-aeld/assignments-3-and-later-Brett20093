@@ -5,15 +5,59 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/stat.h>
+#include <string.h>
+#include <fcntl.h>
 #include "aesdsocket.h"
+
+const int BUFFER_SIZE = 1024;
+const char *outputfile_name = "/var/tmp/aesdsocketdata";
+int output_fd;
+int socket_fd;
+int client_fd;
+
+void stop_process()
+{
+    close(output_fd);
+    close(socket_fd);
+    close(client_fd);
+    if (remove(outputfile_name) != 0) {
+        fprintf(stderr, "error deleteing file %s: %s\n", outputfile_name, strerror(errno));
+    }
+}
 
 int main(int argc, char *argv[])
 {
+    char recv_buffer[BUFFER_SIZE];
+    char send_buffer[BUFFER_SIZE];
+
     openlog(NULL, 0, LOG_USER);
 
-    int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+    output_fd = open(outputfile_name, O_CREAT | O_RDWR, 0644);
+    if (output_fd < 0) 
+    {
+        fprintf(stderr, "Open output file error: %s\n", strerror(errno));
+        return -1;
+    }
+
+    socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (socket_fd < 0)
+    {
+        fprintf(stderr, "socket error: %s\n", strerror(errno));
+        stop_process();
+        return -1;
+    }
     
     printf("socket_fd: %d\n", socket_fd);
+
+    int optval = 1; // Set to 1 to enable SO_REUSEADDR
+    if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) < 0 ) {
+        fprintf(stderr, "setsockopt error: %s\n", strerror(errno));
+        stop_process();
+    }
 
     struct addrinfo hints, *res;
     memset(&hints, 0, sizeof(hints));
@@ -26,6 +70,7 @@ int main(int argc, char *argv[])
     if ((status = getaddrinfo(NULL, "9000", &hints, &res)) != 0)
     {
         fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
+        stop_process();
         return -1;
     }
     printf("Address info setup.\n");
@@ -34,17 +79,103 @@ int main(int argc, char *argv[])
     if ((status = bind(socket_fd, res->ai_addr, sizeof(struct sockaddr))) != 0)
     {
         fprintf(stderr, "bind error: %s\n", gai_strerror(status));
+        stop_process();
         return -1;
     }
     printf("Socket bound.\n");
 
     freeaddrinfo(res);
 
+    printf("Setting up listener...\n");
+
     if ((status = listen(socket_fd, 2)) != 0)
     {
-        fprintf(stderr, "listen error: %s\n", gai_strerror(status));
+        fprintf(stderr, "Listen error: %s\n", gai_strerror(status));
+        stop_process();
         return -1;
     }
+
+    printf("Socket is listening.\n");
+
+    struct sockaddr_in client_addr;
+    socklen_t client_len;
+    client_len = sizeof(client_addr);
+
+    while (1)
+    {
+        printf("Waiting to accept a message...\n");
+
+        client_fd = accept(socket_fd, (struct sockaddr *)&client_addr, &client_len);
+        if (client_fd < 0) 
+        {
+            fprintf(stderr, "Accept error: %s\n", strerror(errno));
+            stop_process();
+            return -1;
+        }
+
+        char ip_str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(client_addr.sin_addr), ip_str, INET_ADDRSTRLEN);
+        printf("Accepted connection from %s\n", ip_str);
+        syslog(LOG_INFO, "Accepted connection from %s\n", ip_str);
+
+        int received_size = 0;
+        do
+        {
+            printf("Receiving from client...\n");
+            received_size = recv(client_fd, recv_buffer, BUFFER_SIZE, 0);
+            if (received_size < 0)
+            {
+                fprintf(stderr, "recv error: %s\n", strerror(errno));
+                stop_process();
+                return -1;
+            }
+            char *ptr = strchr(recv_buffer, '\n');
+            int index = BUFFER_SIZE - 1;
+            if (ptr != NULL)
+            {
+                printf("No newline found!\n");
+                index = ptr - recv_buffer;
+            }
+            printf("index %d\n", index);
+            int write_return = write(output_fd, recv_buffer, index+1);
+            if (write_return == -1)
+            {
+                fprintf(stderr, "write error: %s\n", strerror(errno));
+                stop_process();
+                return -1;
+            }
+            printf("Message received with sizeof %d: %s\n", received_size, recv_buffer);
+        } while (received_size >= BUFFER_SIZE);
+
+        if (lseek(output_fd, 0, SEEK_SET) < 0) 
+        {
+            fprintf(stderr, "lseek error: %s\n", strerror(errno));
+            stop_process();
+            return -1;
+        }
+        int bytes_read = 0;
+        do
+        {
+            bytes_read = read(output_fd, send_buffer, BUFFER_SIZE);
+            if (bytes_read < 0)
+            {
+                fprintf(stderr, "read error: %s\n", strerror(errno));
+                stop_process();
+                return -1;
+            }
+            int sent_bytes = send(client_fd, send_buffer, bytes_read, 0);
+            if (sent_bytes < 0)
+            {
+                fprintf(stderr, "send error: %s\n", strerror(errno));
+                stop_process();
+                return -1;
+            }
+        } while (bytes_read >= BUFFER_SIZE);
+
+        close(client_fd);
+    }
+
+    stop_process();
 
     return 0;
 }
