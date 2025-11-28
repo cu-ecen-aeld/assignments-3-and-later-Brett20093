@@ -11,6 +11,8 @@
 #include <sys/stat.h>
 #include <string.h>
 #include <fcntl.h>
+#include <stdbool.h>
+#include <signal.h>
 #include "aesdsocket.h"
 
 const int BUFFER_SIZE = 1024;
@@ -18,9 +20,11 @@ const char *outputfile_name = "/var/tmp/aesdsocketdata";
 int output_fd;
 int socket_fd;
 int client_fd;
+bool process_running = true;
 
 void stop_process()
 {
+    process_running = false;
     close(output_fd);
     close(socket_fd);
     close(client_fd);
@@ -29,10 +33,31 @@ void stop_process()
     }
 }
 
+static void shutdown_handler(int signal_number)
+{
+    if (signal_number == SIGINT || signal_number == SIGTERM)
+    {
+        syslog(LOG_INFO, "Caught signal, exiting");
+        stop_process();
+    }
+}
+
 int main(int argc, char *argv[])
 {
     char recv_buffer[BUFFER_SIZE];
     char send_buffer[BUFFER_SIZE];
+
+    struct sigaction shutdown_action;
+    memset(&shutdown_action, 0, sizeof(struct sigaction));
+    shutdown_action.sa_handler = shutdown_handler;
+    if (sigaction(SIGINT, &shutdown_action, NULL) != 0)
+    {
+        fprintf(stderr, "Failed to add SIGINT to sigaction: %s\n", strerror(errno));
+    }
+    if (sigaction(SIGTERM, &shutdown_action, NULL) != 0)
+    {
+        fprintf(stderr, "Failed to add SIGTERM to sigaction: %s\n", strerror(errno));
+    }
 
     openlog(NULL, 0, LOG_USER);
 
@@ -101,7 +126,7 @@ int main(int argc, char *argv[])
     socklen_t client_len;
     client_len = sizeof(client_addr);
 
-    while (1)
+    while (process_running)
     {
         printf("Waiting to accept a message...\n");
 
@@ -116,7 +141,7 @@ int main(int argc, char *argv[])
         char ip_str[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &(client_addr.sin_addr), ip_str, INET_ADDRSTRLEN);
         printf("Accepted connection from %s\n", ip_str);
-        syslog(LOG_INFO, "Accepted connection from %s\n", ip_str);
+        syslog(LOG_INFO, "Accepted connection from %s", ip_str);
 
         int received_size = 0;
         do
@@ -173,6 +198,7 @@ int main(int argc, char *argv[])
         } while (bytes_read >= BUFFER_SIZE);
 
         close(client_fd);
+        syslog(LOG_INFO, "Closed connection from %s", ip_str);
     }
 
     stop_process();
