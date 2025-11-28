@@ -15,7 +15,8 @@
 #include <signal.h>
 #include <sys/wait.h>
 
-const int BUFFER_SIZE = 1024;
+#define BUFFER_SIZE 1024
+
 const char *outputfile_name = "/var/tmp/aesdsocketdata";
 int output_fd;
 int socket_fd;
@@ -63,24 +64,30 @@ void setup_handlers()
     }
 }
 
-int recv_messages(char *recv_buffer, int buffer_size)
+int recv_messages(char *recv_buffer)
 {
-    int received_size = 0;
+    ssize_t received_size = 0;
     do
     {
         printf("Receiving from client...\n");
-        received_size = recv(client_fd, recv_buffer, buffer_size, 0);
+        memset(recv_buffer, 0, BUFFER_SIZE);
+        received_size = recv(client_fd, recv_buffer, BUFFER_SIZE, 0);
         if (received_size < 0)
         {
             fprintf(stderr, "recv error: %s\n", strerror(errno));
             return -1;
         }
-        char *ptr = strchr(recv_buffer, '\n');
-        int index = BUFFER_SIZE - 1;
+        char *ptr = memchr(recv_buffer, '\n', received_size);
+        int index = 0;
         if (ptr != NULL)
         {
-            printf("No newline found!\n");
+            printf("Newline found!\n");
             index = ptr - recv_buffer;
+        }
+        else
+        {
+            printf("No newline found!\n");
+            index = received_size - 1;
         }
         printf("index %d\n", index);
         int write_return = write(output_fd, recv_buffer, index+1);
@@ -89,13 +96,13 @@ int recv_messages(char *recv_buffer, int buffer_size)
             fprintf(stderr, "write error: %s\n", strerror(errno));
             return -1;
         }
-        printf("Message received with sizeof %d: %s\n", received_size, recv_buffer);
+        printf("Message received with sizeof %d\n", (int)received_size);
     } while (received_size >= BUFFER_SIZE);
 
     return 0;
 }
 
-int send_messages(char *send_buffer, int buffer_size)
+int send_messages(char *send_buffer)
 {
     if (lseek(output_fd, 0, SEEK_SET) < 0) 
     {
@@ -105,7 +112,7 @@ int send_messages(char *send_buffer, int buffer_size)
     int bytes_read = 0;
     do
     {
-        bytes_read = read(output_fd, send_buffer, buffer_size);
+        bytes_read = read(output_fd, send_buffer, BUFFER_SIZE);
         if (bytes_read < 0)
         {
             fprintf(stderr, "read error: %s\n", strerror(errno));
@@ -163,14 +170,14 @@ int run_server()
         syslog(LOG_INFO, "Accepted connection from %s", ip_str);
 
         // Receiving logic to handle large messages
-        if (recv_messages(recv_buffer, BUFFER_SIZE) == -1)
+        if (recv_messages(recv_buffer) == -1)
         {
             stop_process();
             return -1;
         }
 
         // Sending logic to handle a large file
-        if (send_messages(send_buffer, BUFFER_SIZE) == -1)
+        if (send_messages(send_buffer) == -1)
         {
             stop_process();
             return -1;
