@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <stdbool.h>
 #include <signal.h>
+#include <sys/wait.h>
 
 const int BUFFER_SIZE = 1024;
 const char *outputfile_name = "/var/tmp/aesdsocketdata";
@@ -21,6 +22,7 @@ int socket_fd;
 int client_fd;
 bool process_running = true;
 bool process_stopped = false;
+bool is_daemon = false;
 
 void stop_process()
 {
@@ -120,11 +122,85 @@ int send_messages(char *send_buffer, int buffer_size)
     return 0;
 }
 
-int main(int argc, char *argv[])
+int run_server()
 {
     char recv_buffer[BUFFER_SIZE];
     char send_buffer[BUFFER_SIZE];
 
+    // Setup the socket to listen
+    int status;
+    printf("Setting up listener...\n");
+    if ((status = listen(socket_fd, 2)) != 0)
+    {
+        fprintf(stderr, "Listen error: %s\n", gai_strerror(status));
+        stop_process();
+        return -1;
+    }
+    printf("Socket is listening.\n");
+
+    // Initialize the address structure for the client
+    struct sockaddr_in client_addr;
+    socklen_t client_len;
+    client_len = sizeof(client_addr);
+
+    // Main loop
+    while (process_running)
+    {
+        // Wait for a client to send a message
+        printf("Waiting to accept a message...\n");
+        client_fd = accept(socket_fd, (struct sockaddr *)&client_addr, &client_len);
+        if (client_fd < 0) 
+        {
+            fprintf(stderr, "Accept error: %s\n", strerror(errno));
+            stop_process();
+            return -1;
+        }
+
+        // Convert the client address structure to a human readable IPv4 and log it
+        char ip_str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(client_addr.sin_addr), ip_str, INET_ADDRSTRLEN);
+        printf("Accepted connection from %s\n", ip_str);
+        syslog(LOG_INFO, "Accepted connection from %s", ip_str);
+
+        // Receiving logic to handle large messages
+        if (recv_messages(recv_buffer, BUFFER_SIZE) == -1)
+        {
+            stop_process();
+            return -1;
+        }
+
+        // Sending logic to handle a large file
+        if (send_messages(send_buffer, BUFFER_SIZE) == -1)
+        {
+            stop_process();
+            return -1;
+        }
+
+        // Close the client socket and log it
+        close(client_fd);
+        syslog(LOG_INFO, "Closed connection from %s", ip_str);
+    }
+
+    stop_process();
+    
+    return 0;
+}
+
+int main(int argc, char *argv[])
+{
+    // Check for the -d daemon argument
+    char *daemon_arg = NULL;
+    if (argc > 1)
+    {
+        daemon_arg = argv[1];
+        if (strcmp(daemon_arg, "-d") == 0)
+        {
+            is_daemon = true;
+            printf("Running as a daemon...\n");
+        }
+    }
+
+    // Handlers for catching termination signals
     setup_handlers();
 
     openlog(NULL, 0, LOG_USER);
@@ -184,60 +260,25 @@ int main(int argc, char *argv[])
     // Freeup the memory for the address
     freeaddrinfo(res);
 
-    // Setup the socket to listen
-    printf("Setting up listener...\n");
-    if ((status = listen(socket_fd, 2)) != 0)
+    int ret = 0;
+    if (is_daemon)
     {
-        fprintf(stderr, "Listen error: %s\n", gai_strerror(status));
-        stop_process();
-        return -1;
+        fflush(stdout);
+        pid_t pid = fork();
+        if (pid < 0)
+        {
+            fprintf(stderr, "fork error: %s\n", strerror(errno));
+            return false;
+        }
+        else if (pid == 0)
+        {
+            ret = run_server();
+        }
     }
-    printf("Socket is listening.\n");
-
-    // Initialize the address structure for the client
-    struct sockaddr_in client_addr;
-    socklen_t client_len;
-    client_len = sizeof(client_addr);
-
-    // Main loop
-    while (process_running)
+    else
     {
-        // Wait for a client to send a message
-        printf("Waiting to accept a message...\n");
-        client_fd = accept(socket_fd, (struct sockaddr *)&client_addr, &client_len);
-        if (client_fd < 0) 
-        {
-            fprintf(stderr, "Accept error: %s\n", strerror(errno));
-            stop_process();
-            return -1;
-        }
-
-        // Convert the client address structure to a human readable IPv4 and log it
-        char ip_str[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &(client_addr.sin_addr), ip_str, INET_ADDRSTRLEN);
-        printf("Accepted connection from %s\n", ip_str);
-        syslog(LOG_INFO, "Accepted connection from %s", ip_str);
-
-        // Receiving logic to handle large messages
-        if (recv_messages(recv_buffer, BUFFER_SIZE) == -1)
-        {
-            stop_process();
-            return -1;
-        }
-
-        // Sending logic to handle a large file
-        if (send_messages(send_buffer, BUFFER_SIZE) == -1)
-        {
-            stop_process();
-            return -1;
-        }
-
-        // Close the client socket and log it
-        close(client_fd);
-        syslog(LOG_INFO, "Closed connection from %s", ip_str);
+        ret = run_server();
     }
 
-    stop_process();
-
-    return 0;
+    return ret;
 }
