@@ -13,7 +13,6 @@
 #include <fcntl.h>
 #include <stdbool.h>
 #include <signal.h>
-#include "aesdsocket.h"
 
 const int BUFFER_SIZE = 1024;
 const char *outputfile_name = "/var/tmp/aesdsocketdata";
