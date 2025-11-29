@@ -18,9 +18,9 @@
 #define BUFFER_SIZE 1024
 
 const char *outputfile_name = "/var/tmp/aesdsocketdata";
-int output_fd;
-int socket_fd;
-int client_fd;
+int output_fd = -1;
+int socket_fd = -1;
+int client_fd = -1;
 bool process_running = true;
 bool process_stopped = false;
 bool is_daemon = false;
@@ -30,12 +30,19 @@ void stop_process()
     if (!process_stopped)
     {
         process_running = false;
-        close(output_fd);
-        close(socket_fd);
-        close(client_fd);
-        if (remove(outputfile_name) != 0) {
-            fprintf(stderr, "error deleteing file %s: %s\n", outputfile_name, strerror(errno));
+        if (client_fd >= 0)
+        {
+            close(client_fd);
         }
+        if (socket_fd >= 0)
+        {
+            close(socket_fd);
+        }
+        if (output_fd >= 0)
+        {
+            close(output_fd);
+        }
+        remove(outputfile_name);
         process_stopped = true;
     }
 }
@@ -56,11 +63,11 @@ void setup_handlers()
     shutdown_action.sa_handler = shutdown_handler;
     if (sigaction(SIGINT, &shutdown_action, NULL) != 0)
     {
-        fprintf(stderr, "Failed to add SIGINT to sigaction: %s\n", strerror(errno));
+        syslog(LOG_ERR, "Failed to add SIGINT to sigaction: %s", strerror(errno));
     }
     if (sigaction(SIGTERM, &shutdown_action, NULL) != 0)
     {
-        fprintf(stderr, "Failed to add SIGTERM to sigaction: %s\n", strerror(errno));
+        syslog(LOG_ERR, "Failed to add SIGTERM to sigaction: %s", strerror(errno));
     }
 }
 
@@ -69,34 +76,36 @@ int recv_messages(char *recv_buffer)
     ssize_t received_size = 0;
     do
     {
-        printf("Receiving from client...\n");
+        syslog(LOG_INFO, "Receiving from client...");
         memset(recv_buffer, 0, BUFFER_SIZE);
         received_size = recv(client_fd, recv_buffer, BUFFER_SIZE, 0);
+        if (received_size == 0)
+        {
+            syslog(LOG_ERR, "The client has closed");
+            return -1;
+        }
         if (received_size < 0)
         {
-            fprintf(stderr, "recv error: %s\n", strerror(errno));
+            syslog(LOG_ERR, "recv error: %s", strerror(errno));
             return -1;
         }
         char *ptr = memchr(recv_buffer, '\n', received_size);
         int index = 0;
         if (ptr != NULL)
         {
-            printf("Newline found!\n");
             index = ptr - recv_buffer;
         }
         else
         {
-            printf("No newline found!\n");
             index = received_size - 1;
         }
-        printf("index %d\n", index);
         int write_return = write(output_fd, recv_buffer, index+1);
         if (write_return == -1)
         {
-            fprintf(stderr, "write error: %s\n", strerror(errno));
+            syslog(LOG_ERR, "write error: %s", strerror(errno));
             return -1;
         }
-        printf("Message received with sizeof %d\n", (int)received_size);
+        syslog(LOG_INFO, "Message received with sizeof %d", (int)received_size);
     } while (received_size >= BUFFER_SIZE);
 
     return 0;
@@ -106,7 +115,7 @@ int send_messages(char *send_buffer)
 {
     if (lseek(output_fd, 0, SEEK_SET) < 0) 
     {
-        fprintf(stderr, "lseek error: %s\n", strerror(errno));
+        syslog(LOG_ERR, "lseek error: %s", strerror(errno));
         return -1;
     }
     int bytes_read = 0;
@@ -115,13 +124,13 @@ int send_messages(char *send_buffer)
         bytes_read = read(output_fd, send_buffer, BUFFER_SIZE);
         if (bytes_read < 0)
         {
-            fprintf(stderr, "read error: %s\n", strerror(errno));
+            syslog(LOG_ERR, "read error: %s", strerror(errno));
             return -1;
         }
         int sent_bytes = send(client_fd, send_buffer, bytes_read, 0);
         if (sent_bytes < 0)
         {
-            fprintf(stderr, "send error: %s\n", strerror(errno));
+            syslog(LOG_ERR, "send error: %s", strerror(errno));
             return -1;
         }
     } while (bytes_read >= BUFFER_SIZE);
@@ -136,14 +145,14 @@ int run_server()
 
     // Setup the socket to listen
     int status;
-    printf("Setting up listener...\n");
+    syslog(LOG_INFO, "Setting up listener...");
     if ((status = listen(socket_fd, 2)) != 0)
     {
-        fprintf(stderr, "Listen error: %s\n", gai_strerror(status));
+        syslog(LOG_ERR, "Listen error: %s", gai_strerror(status));
         stop_process();
         return -1;
     }
-    printf("Socket is listening.\n");
+    syslog(LOG_INFO, "Socket is listening.");
 
     // Initialize the address structure for the client
     struct sockaddr_in client_addr;
@@ -154,11 +163,11 @@ int run_server()
     while (process_running)
     {
         // Wait for a client to send a message
-        printf("Waiting to accept a message...\n");
+        syslog(LOG_INFO, "Waiting to accept a message...");
         client_fd = accept(socket_fd, (struct sockaddr *)&client_addr, &client_len);
         if (client_fd < 0) 
         {
-            fprintf(stderr, "Accept error: %s\n", strerror(errno));
+            syslog(LOG_ERR, "Accept error: %s", strerror(errno));
             stop_process();
             return -1;
         }
@@ -166,7 +175,6 @@ int run_server()
         // Convert the client address structure to a human readable IPv4 and log it
         char ip_str[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &(client_addr.sin_addr), ip_str, INET_ADDRSTRLEN);
-        printf("Accepted connection from %s\n", ip_str);
         syslog(LOG_INFO, "Accepted connection from %s", ip_str);
 
         // Receiving logic to handle large messages
@@ -203,7 +211,7 @@ int main(int argc, char *argv[])
         if (strcmp(daemon_arg, "-d") == 0)
         {
             is_daemon = true;
-            printf("Running as a daemon...\n");
+            syslog(LOG_INFO, "Running as a daemon...");
         }
     }
 
@@ -216,7 +224,7 @@ int main(int argc, char *argv[])
     output_fd = open(outputfile_name, O_CREAT | O_RDWR, 0644);
     if (output_fd < 0) 
     {
-        fprintf(stderr, "Open output file error: %s\n", strerror(errno));
+        syslog(LOG_ERR, "Open output file error: %s", strerror(errno));
         return -1;
     }
 
@@ -224,16 +232,17 @@ int main(int argc, char *argv[])
     socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (socket_fd < 0)
     {
-        fprintf(stderr, "socket error: %s\n", strerror(errno));
+        syslog(LOG_ERR, "socket error: %s", strerror(errno));
+        
         stop_process();
         return -1;
     }
-    printf("socket_fd: %d\n", socket_fd);
+    syslog(LOG_INFO, "socket_fd: %d", socket_fd);
 
     // Add the ability to resuse a address that might be in use
     int optval = 1;
     if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) < 0 ) {
-        fprintf(stderr, "setsockopt error: %s\n", strerror(errno));
+        syslog(LOG_ERR, "setsockopt error: %s", strerror(errno));
         stop_process();
     }
 
@@ -245,24 +254,24 @@ int main(int argc, char *argv[])
     hints.ai_socktype = SOCK_STREAM;
 
     int status = 0;
-    printf("Setting up address info...\n");
+    syslog(LOG_INFO, "Setting up address info...");
     if ((status = getaddrinfo(NULL, "9000", &hints, &res)) != 0)
     {
-        fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
+        syslog(LOG_ERR, "getaddrinfo error: %s", gai_strerror(status));
         stop_process();
         return -1;
     }
-    printf("Address info setup.\n");
+    syslog(LOG_INFO, "Address info setup.");
 
     // Bind the server socket to the internet address
-    printf("Binding socket...\n");
-    if ((status = bind(socket_fd, res->ai_addr, sizeof(struct sockaddr))) != 0)
+    syslog(LOG_INFO, "Binding socket...");
+    if ((status = bind(socket_fd, res->ai_addr, res->ai_addrlen)) != 0)
     {
-        fprintf(stderr, "bind error: %s\n", gai_strerror(status));
+        syslog(LOG_ERR, "bind error: %s", strerror(errno));
         stop_process();
         return -1;
     }
-    printf("Socket bound.\n");
+    syslog(LOG_INFO, "Socket bound.");
 
     // Freeup the memory for the address
     freeaddrinfo(res);
@@ -274,12 +283,16 @@ int main(int argc, char *argv[])
         pid_t pid = fork();
         if (pid < 0)
         {
-            fprintf(stderr, "fork error: %s\n", strerror(errno));
+            syslog(LOG_ERR, "fork error: %s", strerror(errno));
             return false;
         }
         else if (pid == 0)
         {
             ret = run_server();
+        }
+        else
+        {
+            exit(0);
         }
     }
     else
