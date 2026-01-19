@@ -2,7 +2,7 @@ CC = gcc
 CROSS_COMPILE ?=
 TARGET = aesdsocket
 SRCS = aesdsocket.c connection_thread.c
-HDRS = aesdsocket.h connection_thread.h
+HDRS = aesdsocket.h connection_thread.h queue.h
 OBJS = $(SRCS:.c=.o)
 CFLAGS = -Wall -Werror
 

@@ -10,11 +10,6 @@
 #include <errno.h>
 #include <arpa/inet.h>
 
-// Optional: use these functions to add debug or error prints to your application
-//#define DEBUG_LOG(msg,...)
-#define DEBUG_LOG(msg,...) printf("threading: " msg "\n" , ##__VA_ARGS__)
-#define ERROR_LOG(msg,...) printf("threading ERROR: " msg "\n" , ##__VA_ARGS__)
-
 #define BUFFER_SIZE 1024
 
 void lock_mutex(pthread_mutex_t *file_mutex)
@@ -42,6 +37,7 @@ int recv_messages(char *recv_buffer, int client_fd, int output_fd, pthread_mutex
     do
     {
         syslog(LOG_INFO, "Receiving from client...");
+        printf("Receiving from client...\n");
         memset(recv_buffer, 0, BUFFER_SIZE);
         received_size = recv(client_fd, recv_buffer, BUFFER_SIZE, 0);
         if (!mutex_set)
@@ -52,12 +48,14 @@ int recv_messages(char *recv_buffer, int client_fd, int output_fd, pthread_mutex
         if (received_size == 0)
         {
             syslog(LOG_ERR, "The client has closed");
+            printf("The client has closed\n");
             unlock_mutex(file_mutex);
             return -1;
         }
         if (received_size < 0)
         {
             syslog(LOG_ERR, "recv error: %s", strerror(errno));
+            printf("recv error: %s\n", strerror(errno));
             unlock_mutex(file_mutex);
             return -1;
         }
@@ -75,10 +73,12 @@ int recv_messages(char *recv_buffer, int client_fd, int output_fd, pthread_mutex
         if (write_return == -1)
         {
             syslog(LOG_ERR, "write error: %s", strerror(errno));
+            printf("write error: %s\n", strerror(errno));
             unlock_mutex(file_mutex);
             return -1;
         }
         syslog(LOG_INFO, "Message received with sizeof %d", (int)received_size);
+        printf("Message received with sizeof %d\n", (int)received_size);
     } while (received_size >= BUFFER_SIZE);
 
     unlock_mutex(file_mutex);
@@ -93,6 +93,7 @@ int send_messages(char *send_buffer, int client_fd, int output_fd, pthread_mutex
     if (lseek(output_fd, 0, SEEK_SET) < 0) 
     {
         syslog(LOG_ERR, "lseek error: %s", strerror(errno));
+        printf("lseek error: %s\n", strerror(errno));
         unlock_mutex(file_mutex);
         return -1;
     }
@@ -103,6 +104,7 @@ int send_messages(char *send_buffer, int client_fd, int output_fd, pthread_mutex
         if (bytes_read < 0)
         {
             syslog(LOG_ERR, "read error: %s", strerror(errno));
+            printf("read error: %s\n", strerror(errno));
             unlock_mutex(file_mutex);
             return -1;
         }
@@ -110,6 +112,7 @@ int send_messages(char *send_buffer, int client_fd, int output_fd, pthread_mutex
         if (sent_bytes < 0)
         {
             syslog(LOG_ERR, "send error: %s", strerror(errno));
+            printf("send error: %s\n", strerror(errno));
             unlock_mutex(file_mutex);
             return -1;
         }
@@ -125,7 +128,7 @@ void* connection_thread(void* thread_param)
     char recv_buffer[BUFFER_SIZE];
     char send_buffer[BUFFER_SIZE];
 
-    struct connection_thread* connection_data = (struct connection_thread *) thread_param;
+    struct connection_thread_args* connection_data = (struct connection_thread_args *) thread_param;
 
     connection_data->thread_complete = false;
 
@@ -152,6 +155,7 @@ void* connection_thread(void* thread_param)
     char ip_str[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &(connection_data->client_addr.sin_addr), ip_str, INET_ADDRSTRLEN);
     syslog(LOG_INFO, "Closed connection from %s", ip_str);
+    printf("Closed connection from %s\n", ip_str);
 
     connection_data->thread_complete_success = true;
     connection_data->thread_complete = true;
