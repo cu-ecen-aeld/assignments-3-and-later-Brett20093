@@ -29,6 +29,7 @@ struct slist_data_s {
 
 
 const char *outputfile_name = "/var/tmp/aesdsocketdata";
+const char *timestamp_tag = "timestamp:";
 static volatile sig_atomic_t quit = 0;
 
 void stop_process(int socket_fd, int output_fd, const char * outputfile_name)
@@ -60,16 +61,14 @@ void setup_handlers()
     if (sigaction(SIGINT, &shutdown_action, NULL) != 0)
     {
         syslog(LOG_ERR, "Failed to add SIGINT to sigaction: %s", strerror(errno));
-        printf("Failed to add SIGINT to sigaction: %s\n", strerror(errno));
     }
     if (sigaction(SIGTERM, &shutdown_action, NULL) != 0)
     {
         syslog(LOG_ERR, "Failed to add SIGTERM to sigaction: %s", strerror(errno));
-        printf("Failed to add SIGINT to sigaction: %s\n", strerror(errno));
     }
 }
 
-int write_timestamp(int output_fd)
+int write_timestamp(int output_fd, pthread_mutex_t *file_mutex)
 {
     time_t rawtime;
     struct tm *timeinfo;
@@ -79,7 +78,25 @@ int write_timestamp(int output_fd)
 
     timeinfo = localtime(&rawtime);
 
-    strftime(buffer, sizeof(buffer), "%a, %d %b %Y %T %z", timeinfo);
+    strftime(buffer, sizeof(buffer), "%a, %d %b %Y %T %z\n", timeinfo);
+
+    lock_mutex(file_mutex);
+    int write_return = write(output_fd, timestamp_tag, strlen(timestamp_tag));
+    if (write_return == -1)
+    {
+        syslog(LOG_ERR, "timestamp_tag write error: %s", strerror(errno));
+        unlock_mutex(file_mutex);
+        return -1;
+    }
+    write_return = write(output_fd, buffer, strlen(buffer));
+    if (write_return == -1)
+    {
+        syslog(LOG_ERR, "timestamp buffer write error: %s", strerror(errno));
+        unlock_mutex(file_mutex);
+        return -1;
+    }
+    unlock_mutex(file_mutex);
+    return 0;
 }
 
 int run_server(int socket_fd, int output_fd)
@@ -87,7 +104,6 @@ int run_server(int socket_fd, int output_fd)
     pthread_mutex_t *file_mutex = malloc(sizeof(pthread_mutex_t));
     if (file_mutex == NULL) {
         syslog(LOG_ERR, "Failed to setup mutex.");
-        printf("Failed to setup mutex.\n");
         return -1;
     }
     pthread_mutex_init(file_mutex, NULL);
@@ -100,15 +116,12 @@ int run_server(int socket_fd, int output_fd)
     // Setup the socket to listen
     int status;
     syslog(LOG_INFO, "Setting up listener...");
-    printf("Setting up listener...\n");
     if ((status = listen(socket_fd, 2)) != 0)
     {
         syslog(LOG_ERR, "Listen error: %s", gai_strerror(status));
-        printf("Listen error: %s\n", gai_strerror(status));
         return -1;
     }
     syslog(LOG_INFO, "Socket is listening.");
-    printf("Socket is listening.\n");
 
     // Initialize the address structure for the client
     struct sockaddr_in client_addr;
@@ -119,7 +132,6 @@ int run_server(int socket_fd, int output_fd)
 
     if (clock_gettime(CLOCK_MONOTONIC, &start_time) != 0) {
         syslog(LOG_ERR, "clock_gettime");
-        printf("Error: clock_gettime\n");
         return -1;
     }
     
@@ -128,8 +140,8 @@ int run_server(int socket_fd, int output_fd)
     {
         if (clock_gettime(CLOCK_MONOTONIC, &now_time) != 0) {
             syslog(LOG_ERR, "clock_gettime");
-            printf("Error: clock_gettime\n");
-            return 1;
+            quit = 1;
+            continue;
         }
 
         // Calculate elapsed time in seconds
@@ -137,21 +149,24 @@ int run_server(int socket_fd, int output_fd)
                          (now_time.tv_nsec - start_time.tv_nsec) / 1e9;
 
         if (elapsed >= 10.0) {
-            printf("10 seconds passed!\n");
+            int ret = write_timestamp(output_fd, file_mutex);
+            if (ret == -1)
+            {
+                quit = 1;
+                continue;
+            }
             start_time = now_time;
         }
 
         struct slist_data_s *tmp;
         SLIST_FOREACH_SAFE(datap, &head, entries, tmp) {
             if (datap->connection->thread_complete) {
-                printf("Thread completed, shutting down...\n");
                 pthread_join(*(datap->thread), NULL);   // note the dereference
-                printf("Thread joined.\n");
                 free(datap->thread);
+                free(datap->connection);
                 SLIST_REMOVE(&head, datap, slist_data_s, entries);
                 free(datap);
             }
-            printf("Checked thread.\n");
         }
 
         // Wait for a client to send a message
@@ -163,7 +178,6 @@ int run_server(int socket_fd, int output_fd)
             }
             else {
                 syslog(LOG_ERR, "Accept error: %s", strerror(errno));
-                printf("Accept error: %s\n", strerror(errno));
                 continue;
             }
         }
@@ -172,20 +186,19 @@ int run_server(int socket_fd, int output_fd)
         char ip_str[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &(client_addr.sin_addr), ip_str, INET_ADDRSTRLEN);
         syslog(LOG_INFO, "Accepted connection from %s", ip_str);
-        printf("Accepted connection from %s", ip_str);
 
         struct connection_thread_args *tData;
         tData = (struct connection_thread_args *)malloc(sizeof(struct connection_thread_args));
         if (tData == NULL) {
             syslog(LOG_ERR, "connection_thread_args memory allocation failed");
-            printf("connection_thread_args memory allocation failed\n");
+            quit = 1;
             continue;
         }
 
         pthread_t *thread = malloc(sizeof(pthread_t));
         if (thread == NULL) {
             ERROR_LOG("pthread_t memory allocation failed");
-            printf("pthread_t memory allocation failed\n");
+            quit = 1;
             continue;
         }
         
@@ -200,27 +213,24 @@ int run_server(int socket_fd, int output_fd)
         int rc = pthread_create(thread, NULL, connection_thread, tData);
         if(rc != 0) {
             ERROR_LOG("pthread_create");
-            return false;
+            quit = 1;
+            continue;
         }
 
         datap = malloc(sizeof(slist_data_t));
         datap->connection = tData;
         datap->thread = thread;
-        printf("Inserted new thread.\n");
         SLIST_INSERT_HEAD(&head, datap, entries);
     }
-    printf("Exitted main loop.\n");
 
     while (!SLIST_EMPTY(&head)) {
         datap = SLIST_FIRST(&head);
-        printf("Shutting down thread...\n");
         close(datap->connection->client_fd);
         pthread_join(*(datap->thread), NULL);
-        printf("Thread joined.\n");
         free(datap->thread);
+        free(datap->connection);
         SLIST_REMOVE_HEAD(&head, entries);
         free(datap);
-        printf("Thread freed.\n");
     }
 
     pthread_mutex_destroy(file_mutex);
@@ -231,6 +241,18 @@ int run_server(int socket_fd, int output_fd)
 
 int main(int argc, char *argv[])
 {
+    bool is_daemon = false;
+    // Check for the -d daemon argument
+    char *daemon_arg = NULL;
+    if (argc > 1)
+    {
+        daemon_arg = argv[1];
+        if (strcmp(daemon_arg, "-d") == 0)
+        {
+            is_daemon = true;
+        }
+    }
+
     // Handlers for catching termination signals
     setup_handlers();
 
@@ -241,7 +263,6 @@ int main(int argc, char *argv[])
     if (output_fd < 0) 
     {
         syslog(LOG_ERR, "Open output file error: %s", strerror(errno));
-        printf("Open output file error: %s\n", strerror(errno));
         return -1;
     }
 
@@ -250,19 +271,16 @@ int main(int argc, char *argv[])
     if (socket_fd < 0)
     {
         syslog(LOG_ERR, "socket error: %s", strerror(errno));
-        printf("socket error: %s\n", strerror(errno));
         
         stop_process(socket_fd, output_fd, outputfile_name);
         return -1;
     }
     syslog(LOG_INFO, "socket_fd: %d", socket_fd);
-    printf("socket_fd: %d\n", socket_fd);
 
     // Add the ability to resuse a address that might be in use
     int optval = 1;
     if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) < 0 ) {
         syslog(LOG_ERR, "setsockopt error: %s", strerror(errno));
-        printf("setsockopt error: %s\n", strerror(errno));
         stop_process(socket_fd, output_fd, outputfile_name);
     }
 
@@ -278,35 +296,46 @@ int main(int argc, char *argv[])
 
     int status = 0;
     syslog(LOG_INFO, "Setting up address info...");
-    printf("Setting up address info...\n");
     if ((status = getaddrinfo(NULL, "9000", &hints, &res)) != 0)
     {
         syslog(LOG_ERR, "getaddrinfo error: %s", gai_strerror(status));
-        printf("getaddrinfo error: %s\n", gai_strerror(status));
         stop_process(socket_fd, output_fd, outputfile_name);
         return -1;
     }
     syslog(LOG_INFO, "Address info setup.");
-    printf("Address info setup.\n");
 
     // Bind the server socket to the internet address
     syslog(LOG_INFO, "Binding socket...");
-    printf( "Binding socket...\n");
     if ((status = bind(socket_fd, res->ai_addr, res->ai_addrlen)) != 0)
     {
         syslog(LOG_ERR, "bind error: %s", strerror(errno));
-        printf("bind error: %s\n", strerror(errno));
         stop_process(socket_fd, output_fd, outputfile_name);
         return -1;
     }
     syslog(LOG_INFO, "Socket bound.");
-    printf("Socket bound.\n");
 
     // Freeup the memory for the address
     freeaddrinfo(res);
 
     int ret = 0;
-    ret = run_server(socket_fd, output_fd);
+    if (is_daemon)
+    {
+        fflush(stdout);
+        pid_t pid = fork();
+        if (pid < 0)
+        {
+            syslog(LOG_ERR, "fork error: %s\n", strerror(errno));
+            return false;
+        }
+        else if (pid == 0)
+        {
+            ret = run_server(socket_fd, output_fd);
+        }
+    }
+    else
+    {
+        ret = run_server(socket_fd, output_fd);
+    }
 
     stop_process(socket_fd, output_fd, outputfile_name);
 

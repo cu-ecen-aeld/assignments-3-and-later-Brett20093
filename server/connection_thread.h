@@ -18,4 +18,8 @@ struct connection_thread_args{
     bool thread_complete;
 };
 
+void lock_mutex(pthread_mutex_t *file_mutex);
+
+void unlock_mutex(pthread_mutex_t *file_mutex);
+
 void* connection_thread(void* thread_param);
