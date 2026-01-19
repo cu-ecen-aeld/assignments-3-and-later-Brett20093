@@ -15,25 +15,19 @@
 #include <signal.h>
 #include <sys/wait.h>
 
-#define BUFFER_SIZE 1024
+#include "connection_thread.h"
 
 const char *outputfile_name = "/var/tmp/aesdsocketdata";
 int output_fd = -1;
 int socket_fd = -1;
-int client_fd = -1;
 bool process_running = true;
 bool process_stopped = false;
-bool is_daemon = false;
 
 void stop_process()
 {
     if (!process_stopped)
     {
         process_running = false;
-        if (client_fd >= 0)
-        {
-            close(client_fd);
-        }
         if (socket_fd >= 0)
         {
             close(socket_fd);
@@ -71,78 +65,8 @@ void setup_handlers()
     }
 }
 
-int recv_messages(char *recv_buffer)
-{
-    ssize_t received_size = 0;
-    do
-    {
-        syslog(LOG_INFO, "Receiving from client...");
-        memset(recv_buffer, 0, BUFFER_SIZE);
-        received_size = recv(client_fd, recv_buffer, BUFFER_SIZE, 0);
-        if (received_size == 0)
-        {
-            syslog(LOG_ERR, "The client has closed");
-            return -1;
-        }
-        if (received_size < 0)
-        {
-            syslog(LOG_ERR, "recv error: %s", strerror(errno));
-            return -1;
-        }
-        char *ptr = memchr(recv_buffer, '\n', received_size);
-        int index = 0;
-        if (ptr != NULL)
-        {
-            index = ptr - recv_buffer;
-        }
-        else
-        {
-            index = received_size - 1;
-        }
-        int write_return = write(output_fd, recv_buffer, index+1);
-        if (write_return == -1)
-        {
-            syslog(LOG_ERR, "write error: %s", strerror(errno));
-            return -1;
-        }
-        syslog(LOG_INFO, "Message received with sizeof %d", (int)received_size);
-    } while (received_size >= BUFFER_SIZE);
-
-    return 0;
-}
-
-int send_messages(char *send_buffer)
-{
-    if (lseek(output_fd, 0, SEEK_SET) < 0) 
-    {
-        syslog(LOG_ERR, "lseek error: %s", strerror(errno));
-        return -1;
-    }
-    int bytes_read = 0;
-    do
-    {
-        bytes_read = read(output_fd, send_buffer, BUFFER_SIZE);
-        if (bytes_read < 0)
-        {
-            syslog(LOG_ERR, "read error: %s", strerror(errno));
-            return -1;
-        }
-        int sent_bytes = send(client_fd, send_buffer, bytes_read, 0);
-        if (sent_bytes < 0)
-        {
-            syslog(LOG_ERR, "send error: %s", strerror(errno));
-            return -1;
-        }
-    } while (bytes_read >= BUFFER_SIZE);
-
-    return 0;
-}
-
 int run_server()
 {
-    char recv_buffer[BUFFER_SIZE];
-    char send_buffer[BUFFER_SIZE];
-
     // Setup the socket to listen
     int status;
     syslog(LOG_INFO, "Setting up listener...");
@@ -164,7 +88,7 @@ int run_server()
     {
         // Wait for a client to send a message
         syslog(LOG_INFO, "Waiting to accept a message...");
-        client_fd = accept(socket_fd, (struct sockaddr *)&client_addr, &client_len);
+        int client_fd = accept(socket_fd, (struct sockaddr *)&client_addr, &client_len);
         if (client_fd < 0) 
         {
             syslog(LOG_ERR, "Accept error: %s", strerror(errno));
@@ -177,23 +101,7 @@ int run_server()
         inet_ntop(AF_INET, &(client_addr.sin_addr), ip_str, INET_ADDRSTRLEN);
         syslog(LOG_INFO, "Accepted connection from %s", ip_str);
 
-        // Receiving logic to handle large messages
-        if (recv_messages(recv_buffer) == -1)
-        {
-            stop_process();
-            return -1;
-        }
-
-        // Sending logic to handle a large file
-        if (send_messages(send_buffer) == -1)
-        {
-            stop_process();
-            return -1;
-        }
-
-        // Close the client socket and log it
-        close(client_fd);
-        syslog(LOG_INFO, "Closed connection from %s", ip_str);
+        
     }
 
     stop_process();
@@ -203,18 +111,6 @@ int run_server()
 
 int main(int argc, char *argv[])
 {
-    // Check for the -d daemon argument
-    char *daemon_arg = NULL;
-    if (argc > 1)
-    {
-        daemon_arg = argv[1];
-        if (strcmp(daemon_arg, "-d") == 0)
-        {
-            is_daemon = true;
-            syslog(LOG_INFO, "Running as a daemon...");
-        }
-    }
-
     // Handlers for catching termination signals
     setup_handlers();
 
@@ -277,28 +173,7 @@ int main(int argc, char *argv[])
     freeaddrinfo(res);
 
     int ret = 0;
-    if (is_daemon)
-    {
-        fflush(stdout);
-        pid_t pid = fork();
-        if (pid < 0)
-        {
-            syslog(LOG_ERR, "fork error: %s", strerror(errno));
-            return false;
-        }
-        else if (pid == 0)
-        {
-            ret = run_server();
-        }
-        else
-        {
-            exit(0);
-        }
-    }
-    else
-    {
-        ret = run_server();
-    }
+    ret = run_server();
 
     return ret;
 }

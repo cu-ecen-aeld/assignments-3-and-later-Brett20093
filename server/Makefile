@@ -1,8 +1,8 @@
 CC = gcc
 CROSS_COMPILE ?=
 TARGET = aesdsocket
-SRCS = aesdsocket.c
-HDRS = aesdsocket.h
+SRCS = aesdsocket.c connection_thread.c
+HDRS = aesdsocket.h connection_thread.h
 OBJS = $(SRCS:.c=.o)
 CFLAGS = -Wall -Werror
 
