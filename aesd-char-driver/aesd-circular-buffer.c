@@ -14,6 +14,9 @@
 #include <string.h>
 #endif
 
+#include <stdio.h>
+#include <stdlib.h>
+
 #include "aesd-circular-buffer.h"
 
 /**
@@ -32,7 +35,34 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
     /**
     * TODO: implement per description
     */
-    return NULL;
+    size_t remaining_offset = char_offset;
+    size_t current_out_offs_offset = 0;
+    bool char_found = false;
+    do
+    {
+        if (buffer->entry[buffer->out_offs + current_out_offs_offset].buffptr == NULL)
+        {
+            return NULL;
+        }
+        if (remaining_offset >= buffer->entry[buffer->out_offs + current_out_offs_offset].size) {
+            remaining_offset -= buffer->entry[buffer->out_offs + current_out_offs_offset].size;
+            current_out_offs_offset++;
+            if (buffer->out_offs + current_out_offs_offset >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
+            {
+                current_out_offs_offset = -1 * buffer->out_offs;
+            }
+            if (current_out_offs_offset == 0)
+            {
+                return NULL;
+            }
+        }
+        else
+        {
+            *entry_offset_byte_rtn = remaining_offset;
+            char_found = true;
+        }
+    } while (!char_found);
+    return &(buffer->entry[buffer->out_offs + current_out_offs_offset]);
 }
 
 /**
@@ -47,6 +77,17 @@ void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const s
     /**
     * TODO: implement per description
     */
+    buffer->entry[buffer->in_offs] = *add_entry;
+    buffer->in_offs += 1;
+    if (buffer->in_offs >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
+    {
+        buffer->full = true;
+        buffer->in_offs = 0;
+    }
+    if (buffer->full)
+    {
+        buffer->out_offs = buffer->in_offs;
+    }
 }
 
 /**
