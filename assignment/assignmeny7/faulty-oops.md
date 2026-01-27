@@ -1,3 +1,5 @@
+# `echo “hello_world” > /dev/faulty` Output and Analysis
+```
 Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000
 Mem abort info:
   ESR = 0x0000000096000045
@@ -40,3 +42,12 @@ Call trace:
  el0t_64_sync+0x18c/0x190
 Code: d2800001 d2800000 d503233f d50323bf (b900003f) 
 ---[ end trace 0000000000000000 ]---
+```
+
+## Derefencing a NULL Pointer
+
+The first line, `Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000`, mentions that a NULL pointer is trying to be dereferenced. This has undefined behavior but usually results in a segmentation fault or, since this is a kernel module, a system fault.
+
+## Call Trace
+
+In the Call Trace, we see `faulty_write+0x10/0x20 [faulty]`. This is telling us that the function `faulty_write` is where the fault occurred, `0x10` is the offset in bytes relative to the start of `faulty_write` of where the fault occurred, and `0x20` is the total size in bytes of the `faulty_write` function. In the function `faulty_write` in `faulty.c`, we see `*(int *)0 = 0;` which is where this fault is happening.
