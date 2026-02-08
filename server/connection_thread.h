@@ -1,3 +1,6 @@
+#ifndef CONNECTION_THREAD_H
+#define CONNECTION_THREAD_H
+
 #include <stdbool.h>
 #include <pthread.h>
 #include <sys/socket.h>
@@ -13,7 +16,6 @@ struct connection_thread_args{
     int client_fd;
     struct sockaddr_in client_addr;
     socklen_t client_len;
-    int output_fd;
     bool thread_complete_success;
     bool thread_complete;
 };
@@ -23,3 +25,5 @@ void lock_mutex(pthread_mutex_t *file_mutex);
 void unlock_mutex(pthread_mutex_t *file_mutex);
 
 void* connection_thread(void* thread_param);
+
+#endif

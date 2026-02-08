@@ -27,22 +27,15 @@ struct slist_data_s {
     SLIST_ENTRY(slist_data_s) entries;
 };
 
-
-const char *outputfile_name = "/var/tmp/aesdsocketdata";
 const char *timestamp_tag = "timestamp:";
 static volatile sig_atomic_t quit = 0;
 
-void stop_process(int socket_fd, int output_fd, const char * outputfile_name)
+void stop_process(int socket_fd)
 {
     if (socket_fd >= 0)
     {
         close(socket_fd);
     }
-    if (output_fd >= 0)
-    {
-        close(output_fd);
-    }
-    remove(outputfile_name);
 }
 
 static void shutdown_handler(int signal_number)
@@ -68,38 +61,7 @@ void setup_handlers()
     }
 }
 
-int write_timestamp(int output_fd, pthread_mutex_t *file_mutex)
-{
-    time_t rawtime;
-    struct tm *timeinfo;
-    char buffer[80];
-
-    time(&rawtime);
-
-    timeinfo = localtime(&rawtime);
-
-    strftime(buffer, sizeof(buffer), "%a, %d %b %Y %T %z\n", timeinfo);
-
-    lock_mutex(file_mutex);
-    int write_return = write(output_fd, timestamp_tag, strlen(timestamp_tag));
-    if (write_return == -1)
-    {
-        syslog(LOG_ERR, "timestamp_tag write error: %s", strerror(errno));
-        unlock_mutex(file_mutex);
-        return -1;
-    }
-    write_return = write(output_fd, buffer, strlen(buffer));
-    if (write_return == -1)
-    {
-        syslog(LOG_ERR, "timestamp buffer write error: %s", strerror(errno));
-        unlock_mutex(file_mutex);
-        return -1;
-    }
-    unlock_mutex(file_mutex);
-    return 0;
-}
-
-int run_server(int socket_fd, int output_fd)
+int run_server(int socket_fd)
 {
     pthread_mutex_t *file_mutex = malloc(sizeof(pthread_mutex_t));
     if (file_mutex == NULL) {
@@ -127,37 +89,10 @@ int run_server(int socket_fd, int output_fd)
     struct sockaddr_in client_addr;
     socklen_t client_len;
     client_len = sizeof(client_addr);
-
-    struct timespec start_time, now_time;
-
-    if (clock_gettime(CLOCK_MONOTONIC, &start_time) != 0) {
-        syslog(LOG_ERR, "clock_gettime");
-        return -1;
-    }
     
     // Main loop
     while (!quit)
     {
-        if (clock_gettime(CLOCK_MONOTONIC, &now_time) != 0) {
-            syslog(LOG_ERR, "clock_gettime");
-            quit = 1;
-            continue;
-        }
-
-        // Calculate elapsed time in seconds
-        double elapsed = (now_time.tv_sec - start_time.tv_sec) +
-                         (now_time.tv_nsec - start_time.tv_nsec) / 1e9;
-
-        if (elapsed >= 10.0) {
-            int ret = write_timestamp(output_fd, file_mutex);
-            if (ret == -1)
-            {
-                quit = 1;
-                continue;
-            }
-            start_time = now_time;
-        }
-
         struct slist_data_s *tmp;
         SLIST_FOREACH_SAFE(datap, &head, entries, tmp) {
             if (datap->connection->thread_complete) {
@@ -206,7 +141,6 @@ int run_server(int socket_fd, int output_fd)
         tData->client_fd = client_fd;
         tData->client_len = client_len;
         tData->file_mutex = file_mutex;
-        tData->output_fd = output_fd;
         tData->thread_complete = false;
         tData->thread_complete_success = false;
 
@@ -258,21 +192,13 @@ int main(int argc, char *argv[])
 
     openlog(NULL, 0, LOG_USER);
 
-    // Open output file
-    int output_fd = open(outputfile_name, O_CREAT | O_RDWR, 0644);
-    if (output_fd < 0) 
-    {
-        syslog(LOG_ERR, "Open output file error: %s", strerror(errno));
-        return -1;
-    }
-
     // Open socket
     int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (socket_fd < 0)
     {
         syslog(LOG_ERR, "socket error: %s", strerror(errno));
         
-        stop_process(socket_fd, output_fd, outputfile_name);
+        stop_process(socket_fd);
         return -1;
     }
     syslog(LOG_INFO, "socket_fd: %d", socket_fd);
@@ -281,7 +207,7 @@ int main(int argc, char *argv[])
     int optval = 1;
     if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) < 0 ) {
         syslog(LOG_ERR, "setsockopt error: %s", strerror(errno));
-        stop_process(socket_fd, output_fd, outputfile_name);
+        stop_process(socket_fd);
     }
 
     int flags = fcntl(socket_fd, F_GETFL, 0);
@@ -299,7 +225,7 @@ int main(int argc, char *argv[])
     if ((status = getaddrinfo(NULL, "9000", &hints, &res)) != 0)
     {
         syslog(LOG_ERR, "getaddrinfo error: %s", gai_strerror(status));
-        stop_process(socket_fd, output_fd, outputfile_name);
+        stop_process(socket_fd);
         return -1;
     }
     syslog(LOG_INFO, "Address info setup.");
@@ -309,7 +235,7 @@ int main(int argc, char *argv[])
     if ((status = bind(socket_fd, res->ai_addr, res->ai_addrlen)) != 0)
     {
         syslog(LOG_ERR, "bind error: %s", strerror(errno));
-        stop_process(socket_fd, output_fd, outputfile_name);
+        stop_process(socket_fd);
         return -1;
     }
     syslog(LOG_INFO, "Socket bound.");
@@ -329,15 +255,15 @@ int main(int argc, char *argv[])
         }
         else if (pid == 0)
         {
-            ret = run_server(socket_fd, output_fd);
+            ret = run_server(socket_fd);
         }
     }
     else
     {
-        ret = run_server(socket_fd, output_fd);
+        ret = run_server(socket_fd);
     }
 
-    stop_process(socket_fd, output_fd, outputfile_name);
+    stop_process(socket_fd);
 
     return ret;
 }

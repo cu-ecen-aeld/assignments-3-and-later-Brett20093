@@ -9,8 +9,11 @@
 #include <string.h>
 #include <errno.h>
 #include <arpa/inet.h>
+#include <fcntl.h>
 
 #define BUFFER_SIZE 1024
+
+const char *outputfile_name = "/dev/aesdchar";
 
 void lock_mutex(pthread_mutex_t *file_mutex)
 {
@@ -29,7 +32,7 @@ void unlock_mutex(pthread_mutex_t *file_mutex)
     }
 }
 
-int recv_messages(char *recv_buffer, int client_fd, int output_fd, pthread_mutex_t *file_mutex)
+int recv_messages(char *recv_buffer, int client_fd, int output_fd)
 {
     ssize_t received_size = 0;
     bool mutex_set = false;
@@ -42,18 +45,15 @@ int recv_messages(char *recv_buffer, int client_fd, int output_fd, pthread_mutex
         if (!mutex_set)
         {
             mutex_set = true;
-            lock_mutex(file_mutex);
         }
         if (received_size == 0)
         {
             syslog(LOG_ERR, "The client has closed");
-            unlock_mutex(file_mutex);
             return -1;
         }
         if (received_size < 0)
         {
             syslog(LOG_ERR, "recv error: %s", strerror(errno));
-            unlock_mutex(file_mutex);
             return -1;
         }
         char *ptr = memchr(recv_buffer, '\n', received_size);
@@ -70,47 +70,35 @@ int recv_messages(char *recv_buffer, int client_fd, int output_fd, pthread_mutex
         if (write_return == -1)
         {
             syslog(LOG_ERR, "write error: %s", strerror(errno));
-            unlock_mutex(file_mutex);
             return -1;
         }
         syslog(LOG_INFO, "Message received with sizeof %d", (int)received_size);
     } while (received_size >= BUFFER_SIZE);
 
-    unlock_mutex(file_mutex);
-
     return 0;
 }
 
-int send_messages(char *send_buffer, int client_fd, int output_fd, pthread_mutex_t *file_mutex)
+int send_messages(char *send_buffer, int client_fd, int output_fd)
 {
-    lock_mutex(file_mutex);
-
-    if (lseek(output_fd, 0, SEEK_SET) < 0) 
+    int bytes_read = BUFFER_SIZE;
+    while (bytes_read > 0)
     {
-        syslog(LOG_ERR, "lseek error: %s", strerror(errno));
-        unlock_mutex(file_mutex);
-        return -1;
+        do
+        {
+            bytes_read = read(output_fd, send_buffer, BUFFER_SIZE);
+            if (bytes_read < 0)
+            {
+                syslog(LOG_ERR, "read error: %s", strerror(errno));
+                return -1;
+            }
+            int sent_bytes = send(client_fd, send_buffer, bytes_read, 0);
+            if (sent_bytes < 0)
+            {
+                syslog(LOG_ERR, "send error: %s", strerror(errno));
+                return -1;
+            }
+        } while (bytes_read >= BUFFER_SIZE);
     }
-    int bytes_read = 0;
-    do
-    {
-        bytes_read = read(output_fd, send_buffer, BUFFER_SIZE);
-        if (bytes_read < 0)
-        {
-            syslog(LOG_ERR, "read error: %s", strerror(errno));
-            unlock_mutex(file_mutex);
-            return -1;
-        }
-        int sent_bytes = send(client_fd, send_buffer, bytes_read, 0);
-        if (sent_bytes < 0)
-        {
-            syslog(LOG_ERR, "send error: %s", strerror(errno));
-            unlock_mutex(file_mutex);
-            return -1;
-        }
-    } while (bytes_read >= BUFFER_SIZE);
-    
-    unlock_mutex(file_mutex);
 
     return 0;
 }
@@ -124,23 +112,36 @@ void* connection_thread(void* thread_param)
 
     connection_data->thread_complete = false;
 
+    lock_mutex(connection_data->file_mutex);
+    int output_fd = open(outputfile_name, O_RDWR, 0666);
+    if (output_fd < 0) 
+    {
+        syslog(LOG_ERR, "Open output file error: %s", strerror(errno));
+        unlock_mutex(connection_data->file_mutex);
+        return thread_param;
+    }
     // Receiving logic to handle large messages
-    if (recv_messages(recv_buffer, connection_data->client_fd, connection_data->output_fd, connection_data->file_mutex) == -1)
+    if (recv_messages(recv_buffer, connection_data->client_fd, output_fd) == -1)
     {
         close(connection_data->client_fd);
         connection_data->thread_complete_success = false;
         connection_data->thread_complete = true;
+        close(output_fd);
+        unlock_mutex(connection_data->file_mutex);
         return thread_param;
     }
 
-    // Sending logic to handle a large file
-    if (send_messages(send_buffer, connection_data->client_fd, connection_data->output_fd, connection_data->file_mutex) == -1)
+    if (send_messages(send_buffer, connection_data->client_fd, output_fd) == -1)
     {
         close(connection_data->client_fd);
         connection_data->thread_complete_success = false;
         connection_data->thread_complete = true;
+        close(output_fd);
+        unlock_mutex(connection_data->file_mutex);
         return thread_param;
     }
+    close(output_fd);
+    unlock_mutex(connection_data->file_mutex);
 
     // Close the client socket and log it
     close(connection_data->client_fd);
