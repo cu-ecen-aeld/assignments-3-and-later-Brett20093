@@ -32,6 +32,7 @@ int aesd_open(struct inode *inode, struct file *filp)
     /**
      * TODO: handle open
      */
+    filp->private_data = container_of(inode->i_cdev, struct aesd_dev, cdev);
     return 0;
 }
 
@@ -52,6 +53,36 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     /**
      * TODO: handle read
      */
+    struct aesd_dev *device = filp->private_data;
+    int err = mutex_lock_interruptible(&device->circular_buffer_mutex);
+    if (err != 0)
+    {
+	    return err;
+    }
+
+    size_t offset = 0;
+    device->current_entry = aesd_circular_buffer_find_entry_offset_for_fpos(&device->circular_buffer, *f_pos, &offset);
+    if (entry != NULL)
+    {
+	    size_t characters = device->current_entry->size - offset;
+	    
+	    if (characters > count)
+	    {
+		    characters = count;
+	    }
+	    
+	    err = copy_to_user(buf, entry->buffptr + offset, characters);
+	    
+	    if (err != 0)
+	    {
+		    mutex_unlock(&device->circular_buffer_mutex);
+		    return err;
+	    }
+	    *f_pos += characters;
+	    retval = characters;
+    }
+
+    mutex_unlock(&device->circular_buffer_mutex);
     return retval;
 }
 
@@ -106,8 +137,7 @@ int aesd_init_module(void)
      * TODO: initialize the AESD specific portion of the device
      */
     mutex_init(&aesd_device.circular_buffer_mutex);
-    aesd_device.circular_buffer = kmalloc(sizeof(struct aesd_circular_buffer), GFP_KERNEL);
-    aesd_circular_buffer_init(aesd_device.circular_buffer);
+    aesd_circular_buffer_init(&aesd_device.circular_buffer);
 
     result = aesd_setup_cdev(&aesd_device);
 
@@ -127,7 +157,16 @@ void aesd_cleanup_module(void)
     /**
      * TODO: cleanup AESD specific poritions here as necessary
      */
-    kfree(aesd_device.circular_buffer);
+    uint8_t i = 0;
+    struct aesd_buffer_entry *entry = NULL;
+    AESD_CIRCULAR_BUFFER_FOREACH(entry, &aesd_device.circular_buffer, i)
+    {
+	    if (entry->buffptr != NULL)
+	    {
+		    kfree(entry->buffptr);
+	    }
+    }
+    mutex_destroy(&aesd_device.circular_buffer_mutex);
 
     unregister_chrdev_region(devno, 1);
 }
