@@ -93,55 +93,42 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
      * TODO: handle write
      */
     struct aesd_dev *device = filp->private_data;
+
     int err = mutex_lock_interruptible(&device->buffer_entry_mutex);
     if (err != 0)
     {
 	    return err;
     }
-
-    char *temp_entry = kmalloc(device->current_entry.size + count, GFP_KERNEL);
-
-    if (!temp_entry) 
+    
+    char *temp_buff = kmalloc(device->current_entry.size + count, GFP_KERNEL);
+    if (temp_buff == NULL)
     {
-        kfree(temp_entry);
-        mutex_unlock(&device->buffer_entry_mutex);
-        return retval;
+	    mutex_unlock(&device->buffer_entry_mutex);
+	    return retval;
     }
-
+    
     if (device->current_entry.buffptr != NULL)
     {
-        memcpy(temp_entry, device->current_entry.buffptr, device->current_entry.size);
-        kfree(device->current_entry.buffptr);
+	    memcpy(temp_buff, device->current_entry.buffptr, device->current_entry.size);
+	    kfree(device->current_entry.buffptr);
     }
-    err = copy_from_user(temp_entry + device->current_entry.size, buf, count);
+    device->current_entry.buffptr = temp_buff;
+    err = copy_from_user(device->current_entry.buffptr + device->current_entry.size, buf, count);
     if (err != 0)
     {
 	    mutex_unlock(&device->buffer_entry_mutex);
 	    return err;
     }
-
-    device->current_entry.buffptr = kmalloc(device->current_entry.size + count, GFP_KERNEL);
     device->current_entry.size += count;
-    memcpy(device->current_entry.buffptr, temp_entry, device->current_entry.size);
-    kfree(temp_entry);
-
-    if (device->current_entry.buffptr != NULL 
-        && strlen(device->current_entry.buffptr) > 0 
-        && device->current_entry.buffptr[strlen(device->current_entry.buffptr) - 1] == '\n')
+    if (temp_buff[device->current_entry.size - 1] == '\n')
     {
-        err = mutex_lock_interruptible(&device->circular_buffer_mutex);
-        if (err != 0)
-        {
-            return err;
-        }
-
-        aesd_circular_buffer_add_entry(&device->circular_buffer,&device->current_entry);
-
-        kfree(aesd_device.current_entry.buffptr);
-        memset(&device->current_entry,0,sizeof(struct aesd_buffer_entry));
-        mutex_unlock(&device->circular_buffer_mutex);
+	    if (device->circular_buffer.full)
+	    {
+		    kfree(device->circular_buffer.entry[device->circular_buffer.in_offs].buffptr);
+	    }
+	    aesd_circular_buffer_add_entry(&device->circular_buffer, &device->current_entry);
+	    memset(&device->current_entry, 0, sizeof(struct aesd_buffer_entry));
     }
-
     retval = count;
     mutex_unlock(&device->buffer_entry_mutex);
 
