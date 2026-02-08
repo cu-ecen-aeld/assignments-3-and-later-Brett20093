@@ -62,7 +62,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 
     size_t offset = 0;
     device->current_entry = aesd_circular_buffer_find_entry_offset_for_fpos(&device->circular_buffer, *f_pos, &offset);
-    if (entry != NULL)
+    if (device->current_entry != NULL)
     {
 	    size_t characters = device->current_entry->size - offset;
 	    
@@ -71,7 +71,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 		    characters = count;
 	    }
 	    
-	    err = copy_to_user(buf, entry->buffptr + offset, characters);
+	    err = copy_to_user(buf, device->current_entry->buffptr + offset, characters);
 	    
 	    if (err != 0)
 	    {
