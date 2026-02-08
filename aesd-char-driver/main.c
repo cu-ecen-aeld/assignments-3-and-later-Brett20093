@@ -99,7 +99,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
 	    return err;
     }
 
-    char *temp_entry = kmalloc(strlen(device->current_entry.buffptr) + count, GFP_KERNEL);
+    char *temp_entry = kmalloc(device->current_entry.size + count, GFP_KERNEL);
 
     if (!temp_entry) 
     {
@@ -108,7 +108,11 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         return retval;
     }
 
-    strcpy(temp_entry, device->current_entry.buffptr);
+    if (device->current_entry.buffptr != NULL)
+    {
+        strcpy(temp_entry, device->current_entry.buffptr);
+        kfree(device->current_entry.buffptr);
+    }
     err = copy_from_user(temp_entry + device->current_entry.size, buf, count);
     if (err != 0)
     {
@@ -116,8 +120,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
 	    return err;
     }
 
-    kfree(device->current_entry.buffptr);
-    device->current_entry.buffptr = kmalloc(strlen(temp_entry), GFP_KERNEL);
+    device->current_entry.buffptr = kmalloc(device->current_entry.size + count, GFP_KERNEL);
     strcpy(device->current_entry.buffptr, temp_entry);
     device->current_entry.size += count;
     kfree(temp_entry);
