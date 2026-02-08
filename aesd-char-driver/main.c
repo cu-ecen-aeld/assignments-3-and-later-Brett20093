@@ -142,10 +142,12 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         mutex_unlock(&device->circular_buffer_mutex);
     }
 
+    retval = count;
     mutex_unlock(&device->buffer_entry_mutex);
 
     return retval;
 }
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
