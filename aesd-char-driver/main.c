@@ -122,12 +122,19 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     device->current_entry.size += count;
     if (temp_buff[device->current_entry.size - 1] == '\n')
     {
+        int err = mutex_lock_interruptible(&device->circular_buffer_mutex);
+        if (err != 0)
+        {
+            mutex_unlock(&device->buffer_entry_mutex);
+            return err;
+        }
 	    if (device->circular_buffer.full)
 	    {
 		    kfree(device->circular_buffer.entry[device->circular_buffer.in_offs].buffptr);
 	    }
 	    aesd_circular_buffer_add_entry(&device->circular_buffer, &device->current_entry);
 	    memset(&device->current_entry, 0, sizeof(struct aesd_buffer_entry));
+        mutex_unlock(&device->circular_buffer_mutex);
     }
     retval = count;
     mutex_unlock(&device->buffer_entry_mutex);
