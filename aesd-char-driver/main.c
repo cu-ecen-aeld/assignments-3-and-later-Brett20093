@@ -105,6 +105,9 @@ int aesd_init_module(void)
     /**
      * TODO: initialize the AESD specific portion of the device
      */
+    mutex_init(&aesd_device.circular_buffer_mutex);
+    aesd_device.circular_buffer = kmalloc(sizeof(struct aesd_circular_buffer), GFP_KERNEL);
+    aesd_circular_buffer_init(aesd_device.circular_buffer);
 
     result = aesd_setup_cdev(&aesd_device);
 
@@ -124,6 +127,7 @@ void aesd_cleanup_module(void)
     /**
      * TODO: cleanup AESD specific poritions here as necessary
      */
+    kfree(aesd_device.circular_buffer);
 
     unregister_chrdev_region(devno, 1);
 }
