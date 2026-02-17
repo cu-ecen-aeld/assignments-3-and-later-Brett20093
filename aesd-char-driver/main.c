@@ -53,17 +53,17 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
 
     struct aesd_dev *device = filp->private_data;
-    int err = mutex_lock_interruptible(&device->circular_buffer_mutex);
+    int err = mutex_lock_interruptible(&device->device_mutex);
     if (err != 0)
     {
 	    return err;
     }
 
-    size_t offset = 0;
+    ssize_t offset = 0;
     struct aesd_buffer_entry *new_entry = aesd_circular_buffer_find_entry_offset_for_fpos(&device->circular_buffer, *f_pos, &offset);
     if (new_entry != NULL)
     {
-	    size_t num_chars = new_entry->size - offset;
+	    ssize_t num_chars = new_entry->size - offset;
 	    
 	    if (num_chars > count)
 	    {
@@ -74,14 +74,14 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 	    
 	    if (err != 0)
 	    {
-		    mutex_unlock(&device->circular_buffer_mutex);
+		    mutex_unlock(&device->device_mutex);
 		    return err;
 	    }
 	    *f_pos += num_chars;
 	    retval = num_chars;
     }
 
-    mutex_unlock(&device->circular_buffer_mutex);
+    mutex_unlock(&device->device_mutex);
     return retval;
 }
 
@@ -95,7 +95,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
      */
     struct aesd_dev *device = filp->private_data;
 
-    int err = mutex_lock_interruptible(&device->buffer_entry_mutex);
+    int err = mutex_lock_interruptible(&device->device_mutex);
     if (err != 0)
     {
 	    return err;
@@ -104,7 +104,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     char *temp_buff = kmalloc(device->current_entry.size + count, GFP_KERNEL);
     if (temp_buff == NULL)
     {
-	    mutex_unlock(&device->buffer_entry_mutex);
+	    mutex_unlock(&device->device_mutex);
 	    return retval;
     }
     
@@ -117,44 +117,32 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     err = copy_from_user(device->current_entry.buffptr + device->current_entry.size, buf, count);
     if (err != 0)
     {
-	    mutex_unlock(&device->buffer_entry_mutex);
+	    mutex_unlock(&device->device_mutex);
 	    return err;
     }
     device->current_entry.size += count;
     if (temp_buff[device->current_entry.size - 1] == '\n')
     {
-        int err = mutex_lock_interruptible(&device->circular_buffer_mutex);
-        if (err != 0)
-        {
-            mutex_unlock(&device->buffer_entry_mutex);
-            return err;
-        }
 	    if (device->circular_buffer.full)
 	    {
 		    kfree(device->circular_buffer.entry[device->circular_buffer.in_offs].buffptr);
 	    }
 	    aesd_circular_buffer_add_entry(&device->circular_buffer, &device->current_entry);
 	    memset(&device->current_entry, 0, sizeof(struct aesd_buffer_entry));
-        mutex_unlock(&device->circular_buffer_mutex);
     }
     retval = count;
-    mutex_unlock(&device->buffer_entry_mutex);
+    mutex_unlock(&device->device_mutex);
 
     return retval;
 }
+
 loff_t aesd_llseek(struct file *filp, loff_t offset, int whence) 
 {    
     struct aesd_dev *device = filp->private_data;
 
-    ssize_t retval = mutex_lock_interruptible(&device->circular_buffer_mutex);
+    ssize_t retval = mutex_lock_interruptible(&device->device_mutex);
     if (retval != 0)
     {
-        return -EINVAL;
-    }
-    retval = mutex_lock_interruptible(&device->buffer_entry_mutex);
-    if (retval != 0)
-    {
-        mutex_unlock(&device->circular_buffer_mutex);
         return -EINVAL;
     }
 
@@ -169,7 +157,7 @@ loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
             break;
         case SEEK_END:
             ssize_t buffer_size = 0;
-            size_t num_entries = 0;
+            ssize_t num_entries = 0;
             if (device->circular_buffer.full)
             {
                 num_entries = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
@@ -183,8 +171,8 @@ loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
                 }
             }
 
-            size_t current_index = device->circular_buffer.in_offs;
-            for (int i = 0; i < num_entries; num_entries++)
+            ssize_t current_index = device->circular_buffer.out_offs;
+            for (int i = 0; i < num_entries; i++)
             {
                 buffer_size += device->circular_buffer.entry[current_index].size;
                 ++current_index;
@@ -196,20 +184,20 @@ loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
             newpos = buffer_size + offset;
             break;
         default:
-            mutex_unlock(&device->buffer_entry_mutex);
-            mutex_unlock(&device->circular_buffer_mutex);
+            mutex_unlock(&device->device_mutex);
             PDEBUG("ERROR: Bad whence for llseek: %d", whence);
             return -EINVAL;
     }
 
-    mutex_unlock(&device->buffer_entry_mutex);
-    mutex_unlock(&device->circular_buffer_mutex);
+    PDEBUG("setting newpos...");
     if (newpos < 0)
     {
+        mutex_unlock(&device->device_mutex);
         PDEBUG("ERROR: Negative new position: %d", newpos);
         return -EINVAL;
     }
     filp->f_pos = newpos;
+    mutex_unlock(&device->device_mutex);
 
     return newpos;
 }
@@ -218,29 +206,24 @@ long aesd_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     struct aesd_dev *device = filp->private_data;
     long newpos = 0;
+    ssize_t retval = mutex_lock_interruptible(&device->device_mutex);
+    if (retval != 0)
+    {
+        return -EINVAL;
+    }
 
     switch (cmd)
     {
         case (AESDCHAR_IOCSEEKTO):
             struct aesd_seekto seekto;
-            size_t retval = copy_from_user(&seekto, (const void __user *)arg, sizeof(struct aesd_seekto));
+            ssize_t retval = copy_from_user(&seekto, (const void __user *)arg, sizeof(struct aesd_seekto));
             if (retval != 0)
             {
-                return -EINVAL;
-            }
-            retval = mutex_lock_interruptible(&device->circular_buffer_mutex);
-            if (retval != 0)
-            {
-                return -EINVAL;
-            }
-            retval = mutex_lock_interruptible(&device->buffer_entry_mutex);
-            if (retval != 0)
-            {
-                mutex_unlock(&device->circular_buffer_mutex);
+                mutex_unlock(&device->device_mutex);
                 return -EINVAL;
             }
 
-            size_t num_entries = 0;
+            ssize_t num_entries = 0;
             if (device->circular_buffer.full)
             {
                 num_entries = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
@@ -256,13 +239,12 @@ long aesd_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
             if (seekto.write_cmd >= num_entries)
             {
-                mutex_unlock(&device->buffer_entry_mutex);
-                mutex_unlock(&device->circular_buffer_mutex);
+                mutex_unlock(&device->device_mutex);
                 return -EINVAL;
             }
 
-            size_t current_index = device->circular_buffer.in_offs;
-            for (int i = 0; i < num_entries; num_entries++)
+            ssize_t current_index = device->circular_buffer.out_offs;
+            for (int i = 0; i < seekto.write_cmd; i++)
             {
                 newpos += device->circular_buffer.entry[current_index].size;
                 ++current_index;
@@ -272,10 +254,9 @@ long aesd_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                 }
             }
 
-            mutex_unlock(&device->buffer_entry_mutex);
-            mutex_unlock(&device->circular_buffer_mutex);
             if (device->circular_buffer.entry[current_index].size <= seekto.write_cmd_offset)
             {
+                mutex_unlock(&device->device_mutex);
                 return -EINVAL;
             }
 
@@ -284,10 +265,12 @@ long aesd_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
             break;
         default:
-            PDEBUG("ERROR: Bad cmd for llseek: %d", cmd);
+            PDEBUG("ERROR: Bad cmd for aesd_unlocked_ioctl: %d", cmd);
+            mutex_unlock(&device->device_mutex);
             return -EINVAL;
     }
 
+    mutex_unlock(&device->device_mutex);
     return newpos;
 }
 
@@ -330,8 +313,7 @@ int aesd_init_module(void)
     }
     memset(&aesd_device,0,sizeof(struct aesd_dev));
 
-    mutex_init(&aesd_device.circular_buffer_mutex);
-    mutex_init(&aesd_device.buffer_entry_mutex);
+    mutex_init(&aesd_device.device_mutex);
     aesd_circular_buffer_init(&aesd_device.circular_buffer);
 
     result = aesd_setup_cdev(&aesd_device);
@@ -359,8 +341,7 @@ void aesd_cleanup_module(void)
 	    }
     }
     kfree(aesd_device.current_entry.buffptr);
-    mutex_destroy(&aesd_device.circular_buffer_mutex);
-    mutex_destroy(&aesd_device.buffer_entry_mutex);
+    mutex_destroy(&aesd_device.device_mutex);
 
     unregister_chrdev_region(devno, 1);
 }
