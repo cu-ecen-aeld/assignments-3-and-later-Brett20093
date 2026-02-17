@@ -1,7 +1,7 @@
 #ifndef CONNECTION_THREAD_H
 #define CONNECTION_THREAD_H
 
-#include "aesd_ioctl.h"
+#include "../aesd-char-driver/aesd_ioctl.h"
 #include <stdbool.h>
 #include <pthread.h>
 #include <sys/socket.h>

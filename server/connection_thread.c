@@ -1,5 +1,5 @@
 #include "connection_thread.h"
-#include "aesd_ioctl.h"
+#include "../aesd-char-driver/aesd_ioctl.h"
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
