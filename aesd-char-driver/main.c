@@ -18,10 +18,11 @@
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
 #include "aesdchar.h"
+#include "aesd_ioctl.h"
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
-MODULE_AUTHOR("Your Name Here"); /** TODO: fill in your name **/
+MODULE_AUTHOR("Brett Lange"); /** TODO: fill in your name **/
 MODULE_LICENSE("Dual BSD/GPL");
 
 struct aesd_dev aesd_device;
@@ -141,13 +142,163 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
 
     return retval;
 }
+loff_t aesd_llseek(struct file *filp, loff_t offset, int whence) 
+{    
+    struct aesd_dev *device = filp->private_data;
+
+    ssize_t retval = mutex_lock_interruptible(&device->circular_buffer_mutex);
+    if (retval != 0)
+    {
+        return -EINVAL;
+    }
+    retval = mutex_lock_interruptible(&device->buffer_entry_mutex);
+    if (retval != 0)
+    {
+        mutex_unlock(&device->circular_buffer_mutex);
+        return -EINVAL;
+    }
+
+    loff_t newpos = 0;
+    switch(whence)
+    {
+        case SEEK_SET:
+            newpos = offset;
+            break;
+        case SEEK_CUR:
+            newpos = filp->f_pos + offset;
+            break;
+        case SEEK_END:
+            ssize_t buffer_size = 0;
+            size_t num_entries = 0;
+            if (device->circular_buffer.full)
+            {
+                num_entries = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+            }
+            else
+            {
+                num_entries = device->circular_buffer.in_offs - device->circular_buffer.out_offs;
+                if (num_entries < 0)
+                {
+                    num_entries += AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+                }
+            }
+
+            size_t current_index = device->circular_buffer.in_offs;
+            for (int i = 0; i < num_entries; num_entries++)
+            {
+                buffer_size += device->circular_buffer.entry[current_index].size;
+                ++current_index;
+                if (current_index >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
+                {
+                    current_index = 0;
+                }
+            }
+            newpos = buffer_size + offset;
+            break;
+        default:
+            mutex_unlock(&device->buffer_entry_mutex);
+            mutex_unlock(&device->circular_buffer_mutex);
+            PDEBUG("ERROR: Bad whence for llseek: %d", whence);
+            return -EINVAL;
+    }
+
+    mutex_unlock(&device->buffer_entry_mutex);
+    mutex_unlock(&device->circular_buffer_mutex);
+    if (newpos < 0)
+    {
+        PDEBUG("ERROR: Negative new position: %d", newpos);
+        return -EINVAL;
+    }
+    filp->f_pos = newpos;
+
+    return newpos;
+}
+
+long aesd_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+    struct aesd_dev *device = filp->private_data;
+    long newpos = 0;
+
+    switch (cmd)
+    {
+        case (AESDCHAR_IOCSEEKTO):
+            struct aesd_seekto seekto;
+            size_t retval = copy_from_user(&seekto, (const void __user *)arg, sizeof(struct aesd_seekto));
+            if (retval != 0)
+            {
+                return -EINVAL;
+            }
+            retval = mutex_lock_interruptible(&device->circular_buffer_mutex);
+            if (retval != 0)
+            {
+                return -EINVAL;
+            }
+            retval = mutex_lock_interruptible(&device->buffer_entry_mutex);
+            if (retval != 0)
+            {
+                mutex_unlock(&device->circular_buffer_mutex);
+                return -EINVAL;
+            }
+
+            size_t num_entries = 0;
+            if (device->circular_buffer.full)
+            {
+                num_entries = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+            }
+            else
+            {
+                num_entries = device->circular_buffer.in_offs - device->circular_buffer.out_offs;
+                if (num_entries < 0)
+                {
+                    num_entries += AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+                }
+            }
+
+            if (seekto.write_cmd >= num_entries)
+            {
+                mutex_unlock(&device->buffer_entry_mutex);
+                mutex_unlock(&device->circular_buffer_mutex);
+                return -EINVAL;
+            }
+
+            size_t current_index = device->circular_buffer.in_offs;
+            for (int i = 0; i < num_entries; num_entries++)
+            {
+                newpos += device->circular_buffer.entry[current_index].size;
+                ++current_index;
+                if (current_index >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
+                {
+                    current_index = 0;
+                }
+            }
+
+            mutex_unlock(&device->buffer_entry_mutex);
+            mutex_unlock(&device->circular_buffer_mutex);
+            if (device->circular_buffer.entry[current_index].size <= seekto.write_cmd_offset)
+            {
+                return -EINVAL;
+            }
+
+            newpos += seekto.write_cmd_offset;
+            filp->f_pos = newpos;
+
+            break;
+        default:
+            PDEBUG("ERROR: Bad cmd for llseek: %d", cmd);
+            return -EINVAL;
+    }
+
+    return newpos;
+}
 
 struct file_operations aesd_fops = {
-    .owner =    THIS_MODULE,
-    .read =     aesd_read,
-    .write =    aesd_write,
-    .open =     aesd_open,
-    .release =  aesd_release,
+    .owner          = THIS_MODULE,
+    .read           = aesd_read,
+    .write          = aesd_write,
+    .open           = aesd_open,
+    .release        = aesd_release,
+    .llseek         = aesd_llseek,
+    .unlocked_ioctl = aesd_unlocked_ioctl,
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)

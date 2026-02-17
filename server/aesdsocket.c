@@ -121,17 +121,22 @@ int run_server(int socket_fd)
         char ip_str[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &(client_addr.sin_addr), ip_str, INET_ADDRSTRLEN);
         syslog(LOG_INFO, "Accepted connection from %s", ip_str);
+        printf("Accepted connection from %s\n", ip_str);
 
         struct connection_thread_args *tData;
+        printf("tData malloc...\n");
         tData = (struct connection_thread_args *)malloc(sizeof(struct connection_thread_args));
         if (tData == NULL) {
+            printf("connection_thread_args memory allocation failed\n");
             syslog(LOG_ERR, "connection_thread_args memory allocation failed");
             quit = 1;
             continue;
         }
 
+        printf("thread malloc...\n");
         pthread_t *thread = malloc(sizeof(pthread_t));
         if (thread == NULL) {
+            printf("pthread_t memory allocation failed\n");
             ERROR_LOG("pthread_t memory allocation failed");
             quit = 1;
             continue;
@@ -144,8 +149,10 @@ int run_server(int socket_fd)
         tData->thread_complete = false;
         tData->thread_complete_success = false;
 
+        printf("pthread_create...\n");
         int rc = pthread_create(thread, NULL, connection_thread, tData);
         if(rc != 0) {
+            printf("error: pthread_create\n");
             ERROR_LOG("pthread_create");
             quit = 1;
             continue;

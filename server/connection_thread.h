@@ -1,6 +1,7 @@
 #ifndef CONNECTION_THREAD_H
 #define CONNECTION_THREAD_H
 
+#include "aesd_ioctl.h"
 #include <stdbool.h>
 #include <pthread.h>
 #include <sys/socket.h>
@@ -25,5 +26,7 @@ void lock_mutex(pthread_mutex_t *file_mutex);
 void unlock_mutex(pthread_mutex_t *file_mutex);
 
 void* connection_thread(void* thread_param);
+
+int check_for_ioctl_command(struct aesd_seekto* seekto, char *recv_buffer, ssize_t received_size);
 
 #endif

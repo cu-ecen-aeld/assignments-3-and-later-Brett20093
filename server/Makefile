@@ -2,10 +2,11 @@ CC ?= gcc
 CROSS_COMPILE ?=
 TARGET = aesdsocket
 SRCS = aesdsocket.c connection_thread.c
-HDRS = aesdsocket.h connection_thread.h queue.h
+HDRS = aesdsocket.h connection_thread.h queue.h aesd_ioctl.h
 OBJS = $(SRCS:.c=.o)
 LDFLAGS ?= -lc -lpthread
-CFLAGS ?= -Wall -Werror
+INCLUDE_DIR ?= ../aesd-char-driver
+CFLAGS ?= -Wall -Werror -I$(INCLUDE_DIR)
 
 all: $(TARGET)
 
